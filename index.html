@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>BulkSender</title>
+		<link
+			rel="stylesheet"
+			href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css"
+			integrity="sha512-z3gLpd7yknf1YoNbCzqRKc4qyor8gaKU1qmn+CShxbuBusANI9QpRohGBreCFkKxLhei6S9CQXFEbbKuqLg0DA=="
+			crossorigin="anonymous"
+			referrerpolicy="no-referrer" />
+		<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+		<script
+			src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"
+			integrity="sha384-I7E8VVD/ismYTF4hNIPjVp/Zjvgyol6VFvRkX/vR+Vc4jQkC+hVqc2pM8ODewa9r"
+			crossorigin="anonymous"></script>
+		<link
+			href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+			rel="stylesheet"
+			integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
+			crossorigin="anonymous" />
+		<script
+			src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+			integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
+			crossorigin="anonymous"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/web3/3.0.0-rc.5/web3.min.js"></script>
+		<script src="bulksender.js"></script>
+		<script src="erc20.js"></script>
+		<script>
+			let CONTRACT, ACCOUNT, tokenContract;
+			let CHAIN_ID, CONFIG;
+			const VALID_CHAINS = { 80084: { name: 'bArtio', address: '0x507cD44539A391b0BF9D1B8C2dE313c4eFDcB203', explorer: 'https://bartio.beratrail.io/' } };
+			function mapUnit(decimals) {
+				return {
+					0: 'noether',
+					1: 'wei',
+					3: 'kwei',
+					6: 'mwei',
+					9: 'gwei',
+					12: 'szabo',
+					15: 'finney',
+					18: 'ether',
+					21: 'kether',
+					24: 'mether',
+					27: 'gether',
+					30: 'tether',
+				}[decimals];
+			}
+			function toWei(value, decimals) {
+				return web3.utils.toWei(value, mapUnit(decimals));
+			}
+			function fromWei(value, decimals) {
+				return web3.utils.fromWei(value, mapUnit(decimals));
+			}
+			async function switchToBerachain() {
+				try {
+					await window.ethereum.request({
+						method: 'wallet_switchEthereumChain',
+						params: [{ chainId: '0x1384' }], // 80084 in hexadecimal
+					});
+					// Reload the page to apply the new network
+					window.location.reload();
+				} catch (switchError) {
+					// This error code indicates that the chain has not been added to MetaMask
+					if (switchError.code === 4902) {
+						try {
+							await window.ethereum.request({
+								method: 'wallet_addEthereumChain',
+								params: [
+									{
+										chainId: '0x1384',
+										chainName: 'bArtio',
+										rpcUrls: ['https://bartio.rpc.berachain.com'],
+										nativeCurrency: {
+											name: 'BERA',
+											symbol: 'BERA',
+											decimals: 18,
+										},
+										blockExplorerUrls: ['https://bartio.beratrail.io'],
+									},
+								],
+							});
+							// Reload the page to apply the new network
+							window.location.reload();
+						} catch (addError) {
+							console.error('Failed to add the Berachain Bartion network:', addError);
+						}
+					} else {
+						console.error('Failed to switch to the Berachain Bartion network:', switchError);
+					}
+				}
+			}
+
+			const ethEnabled = async () => {
+				if (window.ethereum) {
+					await window.ethereum.send('eth_requestAccounts');
+					window.web3 = new Web3(window.ethereum);
+					const account = await window.web3.eth.getAccounts();
+					ACCOUNT = account[0];
+					CHAIN_ID = parseInt(await window.web3.eth.getChainId());
+					CONFIG = VALID_CHAINS[CHAIN_ID];
+					if (!CONFIG) {
+						const validChainsInfo = Object.values(VALID_CHAINS)
+							.map(chain => `${chain.name} (${chain.id})`)
+							.join(', ');
+						document.body.innerHTML = `
+							<div class="alert alert-danger text-center" role="alert">
+								<strong>Wrong Network!</strong> You are connected to chain ID ${CHAIN_ID}. Please connect to the Berachain Bartion network.
+								<br/>
+								Valid chains: ${validChainsInfo}
+								<br/>
+								<button class="btn btn-primary mt-3" onclick="switchToBerachain()">Switch Network</button>
+							</div>
+						`;
+						return false;
+					} else {
+						const navbar = $('#navbar');
+						navbar.html(`
+							<li class="nav-item active">
+								<a class="nav-link" href="${CONFIG.explorer}address/${CONFIG.address}">
+									<i class="fas fa-link me-1"></i>
+									<span class="text-muted small">...${CONFIG.address.slice(-4)}</span>
+								</a>
+							</li>
+						`);
+						navbar.append(`
+							<li class="nav-item">
+								<a class="nav-link" href="${CONFIG.explorer}address/${ACCOUNT}" target="_blank">
+									<i class="fas fa-user-circle me-1"></i>
+									<span class="text-muted small">...${ACCOUNT.slice(-4)}</span>
+								</a>
+							</li>
+						`);
+						navbar.append(`
+							<li class="nav-item">
+								<a class="nav-link" href="https://faucet.kodiak.finance/" target="_blank">
+									<i class="fas fa-faucet me-1"></i>
+									<span>Faucet</span>
+								</a>
+							</li>
+						`);
+						navbar.append(`
+							<li class="nav-item">
+								<a class="nav-link" href="https://kodiak.finance/" target="_blank">
+									<i class="fas fa-exchange-alt me-1"></i>
+									<span>Kodiak</span>
+								</a>
+							</li>
+						`);
+						navbar.show();
+					}
+					CONTRACT = new window.web3.eth.Contract(bulksender, CONFIG.address);
+					return true;
+				}
+				red('No MetaMask support');
+				return false;
+			};
+			function splitAndClean(str) {
+				let arr = str
+					.replaceAll('[', '')
+					.replaceAll(']', '')
+					.replaceAll('"', '')
+					.replaceAll("'", '')
+					.split(RegExp(/[^a-zA-Z\d\\.]+/));
+				let array = [];
+				for (let i in arr) {
+					if (!arr[i]) continue;
+					array.push(arr[i].trimEnd().trimStart());
+				}
+				return array;
+			}
+			//
+			async function sendSameAmountToManyInFee(valueInDecimal, addressesText) {
+				let addressesArray = splitAndClean(addressesText);
+				let valueInWei = web3.utils.toWei(valueInDecimal);
+				const total = parseFloat(valueInDecimal) * addressesArray.length;
+				const totalInWei = web3.utils.toWei(total.toString());
+				try {
+					const gasPrice = await web3.eth.getGasPrice();
+					const adjustedGasPrice = Math.floor(Number(gasPrice) * 1.2).toString();
+					const args = { from: ACCOUNT, value: totalInWei, gasPrice: adjustedGasPrice };
+					CONTRACT.methods.sendSameAmountToManyInFee(addressesArray, valueInWei).estimateGas(args, async function (error, gasAmount) {
+						if (error) {
+							alert.html(error.toString());
+						} else {
+							const tx = await CONTRACT.methods.sendSameAmountToManyInFee(addressesArray, valueInWei).send(args);
+							$('#result').html(tx);
+						}
+					});
+				} catch (e) {
+					green(e.toString());
+				}
+			}
+
+			async function sendEthToMany(valuesInDecimal, addressesText, isWei) {
+				let addressesArray = splitAndClean(addressesText);
+				let valuesArray = splitAndClean(valuesInDecimal);
+				let totalInDecimal = 0;
+				let valuesInWei = [];
+				for (let i in valuesArray) {
+					const value = parseFloat(valuesArray[i]);
+					totalInDecimal += value;
+					if (!isWei) {
+						valuesInWei.push(web3.utils.toWei(value.toString()));
+					} else {
+						valuesInWei.push(value.toString());
+					}
+				}
+				//
+				if (addressesArray.length !== valuesArray.length) {
+					green(`Error: addresses=${addressesArray.length}, values=${valuesArray.length}`);
+					return;
+				}
+				const totalInWei = web3.utils.toWei(totalInDecimal.toString());
+				try {
+					const args = { from: ACCOUNT, value: totalInWei };
+					const gasPrice = await web3.eth.getGasPrice();
+					const adjustedGasPrice = Math.floor(Number(gasPrice) * 1.2).toString();
+					args.gasPrice = adjustedGasPrice;
+					CONTRACT.methods.sendEthToMany(addressesArray, valuesInWei).estimateGas(args, async function (error, gasAmount) {
+						if (error) {
+							green(error.toString());
+						} else {
+							const tx = await CONTRACT.methods.sendEthToMany(addressesArray, valuesInWei).send(args);
+							$('#result').html(tx);
+						}
+					});
+				} catch (e) {
+					green(e.toString());
+				}
+			}
+			let isDark = false;
+			async function applyTheme() {
+				let theme = localStorage.getItem('theme');
+				if (!theme) {
+					theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+					localStorage.setItem('theme', theme);
+					localStorage.setItem('isDark', theme === 'dark' ? 'true' : 'false');
+					document.cookie = `theme=${theme}; path=/; max-age=31536000; SameSite=Strict`;
+					document.cookie = `isDark=${theme === 'dark' ? 'true' : 'false'}; path=/; max-age=31536000; SameSite=Strict`;
+				}
+				isDark = localStorage.getItem('isDark') === 'true';
+				document.documentElement.setAttribute('data-bs-theme', theme);
+				const navbar = document.querySelector('.navbar');
+				navbar.classList.remove('navbar-light', 'navbar-dark', 'bg-light', 'bg-dark', 'border-light', 'border-dark');
+				navbar.classList.add(theme === 'dark' ? 'navbar-dark' : 'navbar-light');
+				navbar.classList.add(theme === 'dark' ? 'bg-dark' : 'bg-light');
+				navbar.classList.add(theme === 'dark' ? 'border-secondary' : 'border-light');
+				const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+				[...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl));
+			}
+
+			async function main() {
+				applyPanelStates();
+				applyTheme();
+				attachInputSaveHandlers();
+				await ethEnabled();
+				await populateSavedValues();
+			}
+			async function loadTokenDetails() {
+				const tokenAddress = $('#tokenAddress').val().trim();
+				if (!tokenAddress) {
+					$('#tokenDetails').hide();
+					$('#sendTokenAmount').parent().parent().hide();
+					return;
+				}
+
+				tokenContract = new window.web3.eth.Contract(ERC20, tokenAddress);
+
+				const name = await tokenContract.methods.name().call();
+				const symbol = await tokenContract.methods.symbol().call();
+				const decimals = await tokenContract.methods.decimals().call();
+				const balance = await tokenContract.methods.balanceOf(ACCOUNT).call();
+				const balanceFormatted = fromWei(balance, decimals);
+
+				$('#tokenName').text(name);
+				$('#tokenSymbol').text(symbol);
+				$('#tokenDecimals').text(decimals);
+				$('#userBalance').text(balanceFormatted);
+				$('#sendTokenAmount').val(balanceFormatted);
+				$('#tokenDetails').show();
+				$('#sendTokenAmount').parent().parent().show();
+				showApproveButton();
+
+				const addressesText = $('#sendTokenAddresses').val().trim();
+				const addressesArray = splitAndClean(addressesText);
+				const addressesCount = addressesArray.length;
+				$('#sendTokenButton').prop('disabled', addressesCount === 0);
+				const amount = $('#sendTokenAmount').val().trim();
+				const amountPerAddress = parseFloat(amount) / addressesCount;
+				$('#sendTokenAmountPerAddress').val(amountPerAddress.toFixed(4));
+				$('#sendTokenButton').html(`<i class="fas fa-paper-plane me-2"></i>Send ${amountPerAddress.toFixed(4)} ${symbol} to ${addressesCount} addresses`);
+			}
+
+			async function showApproveButton() {
+				const amount = $('#sendTokenAmount').val().trim();
+				const decimals = $('#tokenDecimals').text();
+				const amountInWei = toWei(amount, decimals);
+				const spenderAddress = CONTRACT.options.address;
+				const allowance = await tokenContract.methods.allowance(ACCOUNT, spenderAddress).call();
+				const needsApproval = BigInt(allowance) < BigInt(amountInWei);
+
+				$('#approveButton').show();
+				$('#sendTokenAmountSection').show();
+
+				if (needsApproval) {
+					$('#recipientSection').hide();
+					$('#approveButton').text('Approve');
+					$('#approveButton').removeClass('btn-success').addClass('btn-warning');
+				} else {
+					$('#recipientSection').show();
+					$('#approveButton').text('Approved ✓');
+					$('#approveButton').removeClass('btn-warning').addClass('btn-success');
+					$('#approveButton').prop('disabled', true);
+					green('Token approved successfully.');
+				}
+			}
+
+			async function approveToken() {
+				const symbol = $('#tokenSymbol').text();
+				const tokenAddress = $('#tokenAddress').val().trim();
+				const amount = $('#sendTokenAmount').val().trim();
+				if (!amount) {
+					yellow('Please enter an amount to approve.');
+					return;
+				}
+
+				try {
+					const decimals = $('#tokenDecimals').text();
+					const amountInWei = toWei(amount, decimals);
+					yellow(`Approving ${symbol} ${amount}, please wait...`);
+					console.log('approving', CONTRACT.options.address, amountInWei);
+					const gasPrice = await web3.eth.getGasPrice();
+					const adjustedGasPrice = Math.floor(Number(gasPrice) * 1.2).toString();
+					await tokenContract.methods.approve(CONTRACT.options.address, amountInWei).send({ from: ACCOUNT, gasPrice: adjustedGasPrice });
+					green('Token approved successfully.');
+					loadTokenDetails();
+				} catch (error) {
+					console.error('Error approving token:', error);
+					red(`Failed to approve ${symbol} ${amount}: <code>${error.message}</code>`, 15000);
+				}
+			}
+
+			async function sendTokens() {
+				const tokenAddress = $('#tokenAddress').val().trim();
+				const amount = $('#sendTokenAmountPerAddress').val().trim();
+				const addressesText = $('#sendTokenAddresses').val().trim();
+				if (!amount || !addressesText) {
+					yellow('Please enter the amount and recipient addresses.');
+					return;
+				}
+				const addressesArray = splitAndClean(addressesText);
+				const decimals = $('#tokenDecimals').text();
+				const amountInWei = toWei(amount, decimals);
+				const gasPrice = await web3.eth.getGasPrice();
+				const adjustedGasPrice = Math.floor(Number(gasPrice) * 1.2).toString();
+				let estimateGas;
+				try {
+					estimateGas = await CONTRACT.methods.sendSameAmountToManyInToken(tokenAddress, addressesArray, amountInWei).estimateGas({ from: ACCOUNT });
+				} catch (error) {
+					console.error('Error estimating gas:', error.message);
+					red(error.message);
+					return;
+				}
+				try {
+					const args = { from: ACCOUNT, gasPrice: adjustedGasPrice, gas: estimateGas };
+					await CONTRACT.methods.sendSameAmountToManyInToken(tokenAddress, addressesArray, amountInWei).send(args);
+					green('Tokens sent successfully.');
+				} catch (error) {
+					console.error('Error sending tokens:', error.message);
+					red('Failed to send tokens.');
+				}
+			}
+			function togglePanel(panelId) {
+				const body = document.getElementById(`${panelId}-body`);
+				body.classList.toggle('collapse');
+				const isCollapsed = body.classList.contains('collapse');
+				const button = document.querySelector(`#${panelId} .card-header button`);
+				const icon = button.querySelector('i');
+				if (isCollapsed) {
+					icon.classList.remove('fa-chevron-up');
+					icon.classList.add('fa-chevron-down');
+				} else {
+					icon.classList.remove('fa-chevron-down');
+					icon.classList.add('fa-chevron-up');
+				}
+				localStorage.setItem(panelId, !isCollapsed);
+			}
+			function applyPanelStates() {
+				const panels = document.querySelectorAll('.card.mb-4');
+				panels.forEach(panel => {
+					const panelId = panel.id;
+					const isVisible = localStorage.getItem(panelId) === 'true';
+					const body = document.getElementById(`${panelId}-body`);
+					const button = panel.querySelector('.card-header button');
+					const icon = button.querySelector('i');
+					if (isVisible) {
+						body.classList.remove('collapse');
+						icon.classList.remove('fa-chevron-down');
+						icon.classList.add('fa-chevron-up');
+					} else {
+						body.classList.add('collapse');
+						icon.classList.remove('fa-chevron-up');
+						icon.classList.add('fa-chevron-down');
+					}
+				});
+			}
+
+			function saveInputValue(key, value) {
+				console.log('saveInputValue', key, value);
+				localStorage.setItem(key, value);
+			}
+
+			function loadInputValue(key) {
+				return localStorage.getItem(key) || '';
+			}
+
+			function attachInputSaveHandlers() {
+				// Panel 1 Inputs
+				$('#sendSameToManyInEth_value').on('blur', function () {
+					saveInputValue('sendSameToManyInEth_value', $(this).val());
+				});
+				$('#sendSameToManyInEth_addresses').on('blur', function () {
+					saveInputValue('sendSameToManyInEth_addresses', $(this).val());
+				});
+
+				// Panel 2 Inputs
+				$('#sendEthToMany_values').on('blur', function () {
+					saveInputValue('sendEthToMany_values', $(this).val());
+				});
+				$('#sendEthToMany_addresses').on('blur', function () {
+					saveInputValue('sendEthToMany_addresses', $(this).val());
+				});
+
+				// Panel 3 Inputs
+				$('#tokenAddress').on('blur', function () {
+					saveInputValue('tokenAddress', $(this).val());
+				});
+				$('#sendTokenAmount').on('blur', function () {
+					saveInputValue('sendTokenAmount', $(this).val());
+				});
+				$('#sendTokenAddresses').on('blur', function () {
+					saveInputValue('sendTokenAddresses', $(this).val());
+				});
+			}
+
+			function populateSavedValues() {
+				$('#sendSameToManyInEth_value').val(loadInputValue('sendSameToManyInEth_value'));
+				$('#sendSameToManyInEth_addresses').val(loadInputValue('sendSameToManyInEth_addresses'));
+				$('#sendEthToMany_values').val(loadInputValue('sendEthToMany_values'));
+				$('#sendEthToMany_addresses').val(loadInputValue('sendEthToMany_addresses'));
+				const tokenAddress = loadInputValue('tokenAddress');
+				$('#tokenAddress').val(tokenAddress);
+				$('#sendTokenAmount').val(loadInputValue('sendTokenAmount'));
+				$('#sendTokenAddresses').val(loadInputValue('sendTokenAddresses'));
+				if (tokenAddress) loadTokenDetails();
+			}
+
+			// Define alert functions with Font Awesome icons
+			function green(message, timeout = 5000) {
+				showAlert('success', '<i class="fas fa-check-circle me-2"></i>' + message, timeout);
+			}
+
+			function yellow(message, timeout = 5000) {
+				showAlert('warning', '<i class="fas fa-exclamation-triangle me-2"></i>' + message, timeout);
+			}
+
+			function red(message, timeout = 5000) {
+				showAlert('danger', '<i class="fas fa-times-circle me-2"></i>' + message, timeout);
+			}
+
+			function showAlert(type, message, timeout = 5000) {
+				const text_color = isDark ? 'text-white' : 'text-dark';
+				const bg_color = isDark ? 'bg-dark' : 'bg-light';
+				const alertContainer = document.getElementById('alert-container');
+				const toast = document.createElement('div');
+				toast.className = `toast align-items-center border-0 ${bg_color} ${text_color} position-fixed top-0 end-0 m-3`;
+				toast.style.zIndex = '1050';
+				toast.setAttribute('role', 'alert');
+				toast.setAttribute('aria-live', 'assertive');
+				toast.setAttribute('aria-atomic', 'true');
+				toast.innerHTML = `
+					<div class="d-flex">
+						<div class="toast-body">
+							${message}
+						</div>
+						<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+					</div>
+				`;
+				alertContainer.appendChild(toast);
+
+				// Initialize and show the toast
+				const bsToast = new bootstrap.Toast(toast, {
+					autohide: true,
+					delay: timeout,
+				});
+				bsToast.show();
+
+				// Remove from DOM after hidden
+				toast.addEventListener('hidden.bs.toast', () => {
+					toast.remove();
+				});
+			}
+		</script>
+	</head>
+	<body onload="main()">
+		<div id="alert-container" class="ms-auto"></div>
+		<nav class="navbar navbar-expand-lg border-bottom mb-4">
+			<div class="container-fluid">
+				<a class="navbar-brand" href="#">
+					<i class="fas fa-paper-plane me-2"></i>
+					BulkSender
+				</a>
+				<div class="collapse navbar-collapse" id="">
+					<ul class="navbar-nav" id="navbar"></ul>
+				</div>
+
+				<button
+					class="navbar-toggler"
+					type="button"
+					data-bs-toggle="collapse"
+					data-bs-target="#navbarNav"
+					aria-controls="navbarNav"
+					aria-expanded="false"
+					aria-label="Toggle navigation">
+					<span class="navbar-toggler-icon"></span>
+				</button>
+				<!-- Add alert container to the navbar -->
+			</div>
+		</nav>
+		<div class="m-3">
+			<!-- Updated Panel 1: Send Same Amount of ETH to Multiple Wallets -->
+			<div class="card mb-4 shadow" id="panel1">
+				<div class="card-header d-flex justify-content-between align-items-center">
+					<div class="d-flex align-items-left"><i class="fas fa-coins me-2"></i> Send Same Amount of ETH to Multiple Wallets</div>
+					<button type="button" class="btn btn-sm btn-secondary" onclick="togglePanel('panel1')">
+						<i class="fas fa-chevron-down"></i>
+					</button>
+				</div>
+				<div class="card-body collapse" id="panel1-body">
+					<form>
+						<!-- Added usage message inside the form -->
+						<div class="alert alert-info mb-3" role="alert">Specify a single ETH amount and provide the recipient addresses to send the same amount to each.</div>
+						<div class="mb-3">
+							<label for="sendSameToManyInEth_value" class="form-label">ETH Amount (Decimal):</label>
+							<div class="input-group">
+								<span class="input-group-text"><i class="fas fa-coins"></i></span>
+								<input type="number" class="form-control" id="sendSameToManyInEth_value" placeholder="e.g., 0.1" />
+							</div>
+						</div>
+						<div class="mb-3">
+							<label for="sendSameToManyInEth_addresses" class="form-label">Recipient Addresses:</label>
+							<div class="input-group">
+								<span class="input-group-text"><i class="fas fa-wallet"></i></span>
+								<textarea class="form-control" rows="4" id="sendSameToManyInEth_addresses" placeholder="0x1, 0x2, 0x3"></textarea>
+							</div>
+						</div>
+						<button
+							type="button"
+							class="btn btn-primary"
+							onclick="sendSameAmountToManyInFee($('#sendSameToManyInEth_value').val(), $('#sendSameToManyInEth_addresses').val())">
+							<i class="fas fa-paper-plane"></i> Send ETH
+						</button>
+					</form>
+				</div>
+			</div>
+
+			<!-- Updated Panel 2: Send Individual Amount of ETH to Multiple Wallets -->
+			<div class="card mb-4 shadow" id="panel2">
+				<div class="card-header d-flex justify-content-between align-items-center">
+					<div class="d-flex align-items-left"><i class="fas fa-dollar-sign me-2"></i> Send Individual Amount of ETH to Multiple Wallets</div>
+					<button type="button" class="btn btn-sm btn-secondary" onclick="togglePanel('panel2')">
+						<i class="fas fa-chevron-down"></i>
+					</button>
+				</div>
+				<div class="card-body collapse" id="panel2-body">
+					<form>
+						<!-- Added usage message inside the form -->
+						<div class="alert alert-info mb-3" role="alert">Provide different ETH amounts and corresponding recipient addresses to send varying amounts.</div>
+						<div class="mb-3">
+							<label for="sendEthToMany_values" class="form-label">ETH Amounts (Decimal):</label>
+							<div class="input-group">
+								<span class="input-group-text"><i class="fas fa-coins"></i></span>
+								<textarea class="form-control" rows="4" id="sendEthToMany_values" placeholder="0.1, 0.2, 1"></textarea>
+							</div>
+						</div>
+						<div class="mb-3">
+							<label for="sendEthToMany_addresses" class="form-label">Recipient Addresses:</label>
+							<div class="input-group">
+								<span class="input-group-text"><i class="fas fa-wallet"></i></span>
+								<textarea class="form-control" rows="4" id="sendEthToMany_addresses" placeholder="0x1, 0x2, 0x3"></textarea>
+							</div>
+						</div>
+						<div class="d-flex gap-2">
+							<button type="button" class="btn btn-success" onclick="sendEthToMany($('#sendEthToMany_values').val(), $('#sendEthToMany_addresses').val(), false)">
+								<i class="fas fa-dollar-sign"></i> Send as Decimal
+							</button>
+							<button type="button" class="btn btn-secondary" onclick="sendEthToMany($('#sendEthToMany_values').val(), $('#sendEthToMany_addresses').val(), true)">
+								<i class="fas fa-coins"></i> Send as Wei
+							</button>
+						</div>
+					</form>
+				</div>
+			</div>
+
+			<!-- Updated Panel 3: Send Same Amount of an Arbitrary Token to Multiple Wallets -->
+			<div class="card mb-4 shadow" id="panel3">
+				<div class="card-header d-flex justify-content-between align-items-center">
+					<div class="d-flex align-items-left"><i class="fas fa-money-bill me-2"></i> Send Same Amount of an Arbitrary Token to Multiple Wallets</div>
+					<button type="button" class="btn btn-sm btn-secondary" onclick="togglePanel('panel3')">
+						<i class="fas fa-chevron-down"></i>
+					</button>
+				</div>
+				<div class="card-body collapse" id="panel3-body">
+					<form>
+						<div class="mb-3">
+							<label for="tokenAddress" class="form-label">Token Contract Address:</label>
+							<div class="input-group">
+								<span class="input-group-text"><i class="fas fa-money-bill"></i></span>
+								<input type="text" class="form-control" id="tokenAddress" placeholder="0xYourTokenAddress" onblur="loadTokenDetails()" />
+								<button type="button" class="btn btn-secondary" onclick="loadTokenDetails()"><i class="fas fa-sync"></i> Load Token</button>
+							</div>
+						</div>
+						<div id="tokenDetails" class="mb-3 d-flex gap-3 align-items-center" style="display: none">
+							<span class="badge rounded-pill bg-secondary shadow"><i class="fas fa-signature"></i> <span id="tokenName"></span></span>
+							<span class="badge rounded-pill bg-secondary shadow"><i class="fas fa-tag"></i> <span id="tokenSymbol"></span></span>
+							<span class="badge rounded-pill bg-secondary shadow"><i class="fas fa-hashtag"></i> <span id="tokenDecimals"></span></span>
+							<span class="badge rounded-pill bg-secondary shadow"><i class="fas fa-wallet"></i> <span id="userBalance"></span></span>
+						</div>
+						<div id="recipientSection" style="display: none">
+							<div class="mb-3">
+								<label for="sendTokenAddresses" class="form-label">Recipient Addresses:</label>
+								<div class="input-group">
+									<span class="input-group-text"><i class="fas fa-wallet"></i></span>
+									<textarea class="form-control" rows="4" id="sendTokenAddresses" placeholder="0x1, 0x2, 0x3"></textarea>
+								</div>
+							</div>
+							<button type="button" class="btn btn-success shadow" id="sendTokenButton" onclick="sendTokens()">
+								<i class="fas fa-paper-plane me-2"></i>Send Tokens
+							</button>
+						</div>
+						<div class="mb-3" id="sendTokenAmountSection" style="display: none">
+							<div class="d-flex gap-2 align-items-end">
+								<div class="flex-grow-1">
+									<label for="sendTokenAmount" class="form-label"><i class="fas fa-coins me-2"></i>Your Balance:</label>
+									<div class="input-group">
+										<span class="input-group-text"><i class="fas fa-coins"></i></span>
+										<input type="number" class="form-control" id="sendTokenAmount" placeholder="e.g., 100" onblur="showApproveButton()" />
+									</div>
+								</div>
+								<div class="flex-grow-1">
+									<label for="sendTokenAmountPerAddress" class="form-label"><i class="fas fa-user-friends me-2"></i>Amount Per Address:</label>
+									<div class="input-group">
+										<span class="input-group-text"><i class="fas fa-user-friends"></i></span>
+										<input type="number" class="form-control bg-success text-white" id="sendTokenAmountPerAddress" placeholder="e.g., 10" disabled />
+									</div>
+								</div>
+								<button type="button" class="btn btn-warning" id="approveButton" style="display: none" onclick="approveToken()">
+									<i class="fas fa-check"></i> Approve
+								</button>
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+		</div>
+	</body>
+</html>
